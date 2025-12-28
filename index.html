@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Vancouver AR</title>
 
-  <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-  <!-- MindAR -->
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
@@ -18,7 +16,7 @@
       padding: 0;
       overflow: hidden;
       background: transparent;
-      touch-action: none; /* prevent page zoom/scroll gestures */
+      touch-action: none;
     }
     a-scene {
       position: fixed !important;
@@ -29,39 +27,30 @@
     }
     canvas { background: transparent !important; }
     .mindar-ui-overlay, .mindar-ui-loading, .mindar-ui-scanning { z-index: 10 !important; }
-
-    /* (Optional) Hide the VR button if it still appears on some devices */
     .a-enter-vr, .a-enter-ar { display: none !important; }
   </style>
 
   <script>
-    // One-finger drag: yaw (left/right) + pitch (up/down)
-    // Two-finger pinch: zoom (scale)
+    // --- Touch: one-finger yaw+pitch, two-finger pinch zoom ---
     AFRAME.registerComponent('touch-controls', {
       schema: {
-        rotateSpeed: { default: 0.25 },   // higher = faster rotation
-        zoomSpeed:   { default: 0.002 },  // higher = faster pinch scaling
-        minScale:    { default: 0.10 },   // don't go smaller than this
-        maxScale:    { default: 2.00 },   // don't go bigger than this
-        minPitch:    { default: -60 },    // degrees
-        maxPitch:    { default: 60 }      // degrees
+        rotateSpeed: { default: 0.25 },
+        zoomSpeed:   { default: 0.002 },
+        minScale:    { default: 0.10 },
+        maxScale:    { default: 2.00 },
+        minPitch:    { default: -60 },
+        maxPitch:    { default: 60 }
       },
 
       init: function () {
-        // Prevent browser gesture handling from interfering
         document.body.style.touchAction = 'none';
-
         this.dragging = false;
-        this.lastX = 0;
-        this.lastY = 0;
-
+        this.lastX = 0; this.lastY = 0;
         this.pinchStartDist = null;
         this.startScale = null;
 
         this.onTouchStart = (e) => {
-          // Stop browser from handling gestures
           e.preventDefault();
-
           if (e.touches.length === 1) {
             this.dragging = true;
             this.lastX = e.touches[0].clientX;
@@ -79,59 +68,46 @@
         this.onTouchMove = (e) => {
           e.preventDefault();
 
-          // One-finger rotate
+          // rotate
           if (e.touches.length === 1 && this.dragging) {
             const x = e.touches[0].clientX;
             const y = e.touches[0].clientY;
             const dx = x - this.lastX;
             const dy = y - this.lastY;
-            this.lastX = x;
-            this.lastY = y;
+            this.lastX = x; this.lastY = y;
 
             const rot = this.el.getAttribute('rotation');
-
-            // yaw (left/right)
-            rot.y += dx * this.data.rotateSpeed;
-
-            // pitch (up/down): drag up -> nose up
-            rot.x -= dy * this.data.rotateSpeed;
-
-            // clamp pitch
+            rot.y += dx * this.data.rotateSpeed;  // yaw
+            rot.x += dy * this.data.rotateSpeed;  // pitch (drag up/down follows finger)
             rot.x = Math.max(this.data.minPitch, Math.min(this.data.maxPitch, rot.x));
-
             this.el.setAttribute('rotation', rot);
           }
 
-          // Two-finger pinch zoom
+          // pinch zoom
           if (e.touches.length === 2 && this.pinchStartDist && this.startScale) {
             const dist = this._touchDist(e.touches[0], e.touches[1]);
             const delta = dist - this.pinchStartDist;
-
             const factor = 1 + (delta * this.data.zoomSpeed);
 
-            let newScaleX = this.startScale.x * factor;
-            let newScaleY = this.startScale.y * factor;
-            let newScaleZ = this.startScale.z * factor;
+            let sx = this.startScale.x * factor;
+            let sy = this.startScale.y * factor;
+            let sz = this.startScale.z * factor;
 
-            // clamp scale
-            newScaleX = Math.max(this.data.minScale, Math.min(this.data.maxScale, newScaleX));
-            newScaleY = Math.max(this.data.minScale, Math.min(this.data.maxScale, newScaleY));
-            newScaleZ = Math.max(this.data.minScale, Math.min(this.data.maxScale, newScaleZ));
+            sx = Math.max(this.data.minScale, Math.min(this.data.maxScale, sx));
+            sy = Math.max(this.data.minScale, Math.min(this.data.maxScale, sy));
+            sz = Math.max(this.data.minScale, Math.min(this.data.maxScale, sz));
 
-            this.el.setAttribute('scale', { x: newScaleX, y: newScaleY, z: newScaleZ });
+            this.el.setAttribute('scale', { x: sx, y: sy, z: sz });
           }
         };
 
         this.onTouchEnd = (e) => {
           e.preventDefault();
-
           if (e.touches.length === 0) {
             this.dragging = false;
             this.pinchStartDist = null;
             this.startScale = null;
           }
-
-          // If one finger remains after pinch, reset drag baseline
           if (e.touches.length === 1) {
             this.dragging = true;
             this.lastX = e.touches[0].clientX;
@@ -153,31 +129,79 @@
         return Math.sqrt(dx * dx + dy * dy);
       }
     });
+
+    // --- Stabilize the AR anchor (reduces hand-shake jitter) ---
+    // Put this on a child entity under the mindar-image-target.
+    AFRAME.registerComponent('stabilize-anchor', {
+      schema: {
+        posLerp: { default: 0.18 }, // 0..1 (lower = smoother, more lag)
+        rotLerp: { default: 0.12 }  // 0..1 (lower = smoother, more lag)
+      },
+
+      init: function () {
+        this.tmpPos = new THREE.Vector3();
+        this.tmpQuat = new THREE.Quaternion();
+        this.currPos = new THREE.Vector3();
+        this.currQuat = new THREE.Quaternion();
+        this.inited = false;
+      },
+
+      tick: function () {
+        const parent = this.el.parentEl;
+        if (!parent || !parent.object3D) return;
+
+        // Parent is the tracked pose updated by MindAR
+        parent.object3D.getWorldPosition(this.tmpPos);
+        parent.object3D.getWorldQuaternion(this.tmpQuat);
+
+        // Convert world -> local space of parent so child stays aligned properly
+        // We want child to match parent pose but smoothly.
+        // Since child is under parent, we can smooth using parent's local transform:
+        const targetPos = parent.object3D.position.clone();
+        const targetQuat = parent.object3D.quaternion.clone();
+
+        if (!this.inited) {
+          this.currPos.copy(targetPos);
+          this.currQuat.copy(targetQuat);
+          this.inited = true;
+        }
+
+        // Smooth
+        this.currPos.lerp(targetPos, this.data.posLerp);
+        this.currQuat.slerp(targetQuat, this.data.rotLerp);
+
+        this.el.object3D.position.copy(this.currPos);
+        this.el.object3D.quaternion.copy(this.currQuat);
+      }
+    });
   </script>
 </head>
 
 <body>
   <a-scene
     mindar-image="imageTargetSrc: targets.mind; uiScanning: yes; uiLoading: yes;
+      filterMinCF: 0.001; filterBeta: 0.001;
       videoSettings: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }"
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false">
 
-    <!-- Lights -->
     <a-entity light="type: ambient; intensity: 1.2"></a-entity>
     <a-entity light="type: directional; intensity: 1.0" position="1 2 1"></a-entity>
 
     <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
 
     <a-entity mindar-image-target="targetIndex: 0">
-      <a-gltf-model
-        id="carModel"
-        src="car.glb"
-        position="0 -0.10 0"
-        rotation="0 0 0"
-        scale="0.35 0.35 0.35"
-        touch-controls="rotateSpeed: 0.25; zoomSpeed: 0.002; minScale: 0.10; maxScale: 2.00; minPitch: -60; maxPitch: 60">
-      </a-gltf-model>
+      <!-- Stabilized container -->
+      <a-entity stabilize-anchor="posLerp: 0.18; rotLerp: 0.12">
+        <a-gltf-model
+          id="carModel"
+          src="car.glb"
+          position="0 -0.10 0"
+          rotation="0 0 0"
+          scale="0.35 0.35 0.35"
+          touch-controls>
+        </a-gltf-model>
+      </a-entity>
     </a-entity>
 
   </a-scene>
