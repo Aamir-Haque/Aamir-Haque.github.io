@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Vancouver AR</title>
 
+  <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <!-- MindAR -->
   <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
 
   <style>
@@ -16,7 +18,7 @@
       padding: 0;
       overflow: hidden;
       background: transparent;
-      touch-action: none; /* helps dragging */
+      touch-action: none; /* prevent page zoom/scroll gestures */
     }
     a-scene {
       position: fixed !important;
@@ -27,41 +29,128 @@
     }
     canvas { background: transparent !important; }
     .mindar-ui-overlay, .mindar-ui-loading, .mindar-ui-scanning { z-index: 10 !important; }
+
+    /* (Optional) Hide the VR button if it still appears on some devices */
+    .a-enter-vr, .a-enter-ar { display: none !important; }
   </style>
 
   <script>
-    // Drag-to-rotate component (one-finger swipe)
-    AFRAME.registerComponent('drag-rotate', {
-      schema: { speed: { default: 0.4 } },
+    // One-finger drag: yaw (left/right) + pitch (up/down)
+    // Two-finger pinch: zoom (scale)
+    AFRAME.registerComponent('touch-controls', {
+      schema: {
+        rotateSpeed: { default: 0.25 },   // higher = faster rotation
+        zoomSpeed:   { default: 0.002 },  // higher = faster pinch scaling
+        minScale:    { default: 0.10 },   // don't go smaller than this
+        maxScale:    { default: 2.00 },   // don't go bigger than this
+        minPitch:    { default: -60 },    // degrees
+        maxPitch:    { default: 60 }      // degrees
+      },
+
       init: function () {
+        // Prevent browser gesture handling from interfering
+        document.body.style.touchAction = 'none';
+
         this.dragging = false;
         this.lastX = 0;
+        this.lastY = 0;
 
-        this.onDown = (e) => {
-          this.dragging = true;
-          this.lastX = (e.touches ? e.touches[0].clientX : e.clientX);
+        this.pinchStartDist = null;
+        this.startScale = null;
+
+        this.onTouchStart = (e) => {
+          // Stop browser from handling gestures
+          e.preventDefault();
+
+          if (e.touches.length === 1) {
+            this.dragging = true;
+            this.lastX = e.touches[0].clientX;
+            this.lastY = e.touches[0].clientY;
+            this.pinchStartDist = null;
+            this.startScale = null;
+          } else if (e.touches.length === 2) {
+            this.dragging = false;
+            this.pinchStartDist = this._touchDist(e.touches[0], e.touches[1]);
+            const s = this.el.getAttribute('scale');
+            this.startScale = { x: s.x, y: s.y, z: s.z };
+          }
         };
 
-        this.onMove = (e) => {
-          if (!this.dragging) return;
-          const x = (e.touches ? e.touches[0].clientX : e.clientX);
-          const dx = x - this.lastX;
-          this.lastX = x;
+        this.onTouchMove = (e) => {
+          e.preventDefault();
 
-          const rot = this.el.getAttribute('rotation');
-          rot.y += dx * this.data.speed;
-          this.el.setAttribute('rotation', rot);
+          // One-finger rotate
+          if (e.touches.length === 1 && this.dragging) {
+            const x = e.touches[0].clientX;
+            const y = e.touches[0].clientY;
+            const dx = x - this.lastX;
+            const dy = y - this.lastY;
+            this.lastX = x;
+            this.lastY = y;
+
+            const rot = this.el.getAttribute('rotation');
+
+            // yaw (left/right)
+            rot.y += dx * this.data.rotateSpeed;
+
+            // pitch (up/down): drag up -> nose up
+            rot.x -= dy * this.data.rotateSpeed;
+
+            // clamp pitch
+            rot.x = Math.max(this.data.minPitch, Math.min(this.data.maxPitch, rot.x));
+
+            this.el.setAttribute('rotation', rot);
+          }
+
+          // Two-finger pinch zoom
+          if (e.touches.length === 2 && this.pinchStartDist && this.startScale) {
+            const dist = this._touchDist(e.touches[0], e.touches[1]);
+            const delta = dist - this.pinchStartDist;
+
+            const factor = 1 + (delta * this.data.zoomSpeed);
+
+            let newScaleX = this.startScale.x * factor;
+            let newScaleY = this.startScale.y * factor;
+            let newScaleZ = this.startScale.z * factor;
+
+            // clamp scale
+            newScaleX = Math.max(this.data.minScale, Math.min(this.data.maxScale, newScaleX));
+            newScaleY = Math.max(this.data.minScale, Math.min(this.data.maxScale, newScaleY));
+            newScaleZ = Math.max(this.data.minScale, Math.min(this.data.maxScale, newScaleZ));
+
+            this.el.setAttribute('scale', { x: newScaleX, y: newScaleY, z: newScaleZ });
+          }
         };
 
-        this.onUp = () => { this.dragging = false; };
+        this.onTouchEnd = (e) => {
+          e.preventDefault();
 
-        window.addEventListener('touchstart', this.onDown, { passive: true });
-        window.addEventListener('touchmove', this.onMove, { passive: true });
-        window.addEventListener('touchend', this.onUp, { passive: true });
+          if (e.touches.length === 0) {
+            this.dragging = false;
+            this.pinchStartDist = null;
+            this.startScale = null;
+          }
 
-        window.addEventListener('mousedown', this.onDown);
-        window.addEventListener('mousemove', this.onMove);
-        window.addEventListener('mouseup', this.onUp);
+          // If one finger remains after pinch, reset drag baseline
+          if (e.touches.length === 1) {
+            this.dragging = true;
+            this.lastX = e.touches[0].clientX;
+            this.lastY = e.touches[0].clientY;
+            this.pinchStartDist = null;
+            this.startScale = null;
+          }
+        };
+
+        window.addEventListener('touchstart', this.onTouchStart, { passive: false });
+        window.addEventListener('touchmove',  this.onTouchMove,  { passive: false });
+        window.addEventListener('touchend',   this.onTouchEnd,   { passive: false });
+        window.addEventListener('touchcancel',this.onTouchEnd,   { passive: false });
+      },
+
+      _touchDist: function (t1, t2) {
+        const dx = t1.clientX - t2.clientX;
+        const dy = t1.clientY - t2.clientY;
+        return Math.sqrt(dx * dx + dy * dy);
       }
     });
   </script>
@@ -87,9 +176,7 @@
         position="0 -0.10 0"
         rotation="0 0 0"
         scale="0.35 0.35 0.35"
-        drag-rotate>
-        <!-- Optional auto-rotate: uncomment if you want it always spinning -->
-        <!-- animation="property: rotation; to: 0 360 0; loop: true; dur: 12000; easing: linear" -->
+        touch-controls="rotateSpeed: 0.25; zoomSpeed: 0.002; minScale: 0.10; maxScale: 2.00; minPitch: -60; maxPitch: 60">
       </a-gltf-model>
     </a-entity>
 
