@@ -16,6 +16,7 @@
       padding: 0;
       overflow: hidden;
       background: transparent;
+      touch-action: none; /* helps dragging */
     }
     a-scene {
       position: fixed !important;
@@ -24,13 +25,46 @@
       height: 100% !important;
       background: transparent !important;
     }
-    canvas {
-      background: transparent !important;
-    }
-    .mindar-ui-overlay, .mindar-ui-loading, .mindar-ui-scanning {
-      z-index: 10 !important;
-    }
+    canvas { background: transparent !important; }
+    .mindar-ui-overlay, .mindar-ui-loading, .mindar-ui-scanning { z-index: 10 !important; }
   </style>
+
+  <script>
+    // Drag-to-rotate component (one-finger swipe)
+    AFRAME.registerComponent('drag-rotate', {
+      schema: { speed: { default: 0.4 } },
+      init: function () {
+        this.dragging = false;
+        this.lastX = 0;
+
+        this.onDown = (e) => {
+          this.dragging = true;
+          this.lastX = (e.touches ? e.touches[0].clientX : e.clientX);
+        };
+
+        this.onMove = (e) => {
+          if (!this.dragging) return;
+          const x = (e.touches ? e.touches[0].clientX : e.clientX);
+          const dx = x - this.lastX;
+          this.lastX = x;
+
+          const rot = this.el.getAttribute('rotation');
+          rot.y += dx * this.data.speed;
+          this.el.setAttribute('rotation', rot);
+        };
+
+        this.onUp = () => { this.dragging = false; };
+
+        window.addEventListener('touchstart', this.onDown, { passive: true });
+        window.addEventListener('touchmove', this.onMove, { passive: true });
+        window.addEventListener('touchend', this.onUp, { passive: true });
+
+        window.addEventListener('mousedown', this.onDown);
+        window.addEventListener('mousemove', this.onMove);
+        window.addEventListener('mouseup', this.onUp);
+      }
+    });
+  </script>
 </head>
 
 <body>
@@ -40,7 +74,7 @@
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false">
 
-    <!-- Lights to make the model visible -->
+    <!-- Lights -->
     <a-entity light="type: ambient; intensity: 1.2"></a-entity>
     <a-entity light="type: directional; intensity: 1.0" position="1 2 1"></a-entity>
 
@@ -48,10 +82,14 @@
 
     <a-entity mindar-image-target="targetIndex: 0">
       <a-gltf-model
+        id="carModel"
         src="car.glb"
-        position="0 -0.15 0"
-        rotation="0 180 0"
-        scale="0.12 0.12 0.12">
+        position="0 -0.10 0"
+        rotation="0 0 0"
+        scale="0.35 0.35 0.35"
+        drag-rotate>
+        <!-- Optional auto-rotate: uncomment if you want it always spinning -->
+        <!-- animation="property: rotation; to: 0 360 0; loop: true; dur: 12000; easing: linear" -->
       </a-gltf-model>
     </a-entity>
 
